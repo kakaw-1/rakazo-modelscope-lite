@@ -23,7 +23,7 @@ LABEL org.opencontainers.image.revision="${RAKAZO_COMMIT}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash ca-certificates curl tini procps \
-    xvfb x11-utils openbox xdotool xclip scrot \
+    xvfb x11-utils openbox xdotool xclip scrot x11vnc novnc websockify \
     fonts-liberation fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
@@ -46,11 +46,10 @@ COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY --from=build /usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/pnpm
 RUN ln -s ../lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm
 
-RUN useradd -m -u 10001 -s /usr/sbin/nologin rakazo
 COPY --from=build /app /app
 WORKDIR /app
-RUN install -d -m 0750 -o rakazo -g rakazo \
-      /var/lib/rakazo/data /var/lib/rakazo/chrome /app/apps/web/node_modules/.vite-temp \
+RUN install -d -m 0700 -o root -g root \
+      /var/lib/rakazo/data /var/lib/rakazo/chrome /var/lib/rakazo/screenshots /app/apps/web/node_modules/.vite-temp \
     && install -d -m 0700 -o postgres -g postgres /var/lib/rakazo/pgdata \
     && chmod 0755 /app/infra/modelscope-single/entrypoint.sh \
     && chmod 0755 /app/infra/modelscope-single/desktopctl \
@@ -65,7 +64,13 @@ ENV NODE_ENV=development \
     POSTGRES_USER=rakazo \
     POSTGRES_DB=rakazo \
     API_HOST=127.0.0.1 \
-    API_PORT=3100
+    API_PORT=3100 \
+    HOME=/root \
+    XDG_RUNTIME_DIR=/tmp/rakazo-xdg
+
+# Rakazo API/Worker/Web and the Desktop Provider intentionally run as root.
+# PostgreSQL still drops privileges to its own postgres account.
+USER root
 
 EXPOSE 7860
 STOPSIGNAL SIGTERM

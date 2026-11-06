@@ -24,12 +24,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.url === '/ready') {
-    const [postgres, api, web] = await Promise.all([
-      checkPort(5432), checkPort(3100), checkPort(5173),
+    const [postgres, api, web, vnc, screen] = await Promise.all([
+      checkPort(5432), checkPort(3100), checkPort(5173), checkPort(5900), checkPort(6080),
     ]);
-    const ready = postgres && api && web;
+    const ready = postgres && api && web && vnc && screen;
     res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ready, components: { postgres, api, web } }));
+    res.end(JSON.stringify({ ready, components: { postgres, api, web, vnc, screen } }));
     return;
   }
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });

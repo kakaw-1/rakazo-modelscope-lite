@@ -1,39 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export DISPLAY="${DISPLAY:-:99}"
-
+usage() {
+  echo 'Usage: desktopctl size | screenshot FILE.png | click X Y | type TEXT | key KEY | url URL | scroll up|down [COUNT]' >&2
+  exit 2
+}
 case "${1:-}" in
-  screenshot)
-    target="${2:-/tmp/rakazo-desktop.png}"
-    mkdir -p "$(dirname "$target")"
-    scrot -z "$target"
-    echo "$target"
-    ;;
   size)
-    xdpyinfo | grep -E 'dimensions:'
+    xdpyinfo | grep 'dimensions:'
     ;;
-  url)
-    [[ $# -eq 2 ]] || { echo 'Usage: desktopctl url URL' >&2; exit 2; }
-    xdotool key --clearmodifiers ctrl+l
-    printf %s "$2" | xclip -selection clipboard
-    xdotool key --clearmodifiers ctrl+v Return
+  screenshot)
+    [[ $# -eq 2 ]] || usage
+    mkdir -p "$(dirname "$2")"
+    scrot -z "$2"
+    echo "$2"
     ;;
   click)
-    [[ $# -eq 3 ]] || { echo 'Usage: desktopctl click X Y' >&2; exit 2; }
+    [[ $# -eq 3 ]] || usage
     xdotool mousemove --sync "$2" "$3" click 1
     ;;
   type)
-    shift
-    [[ $# -gt 0 ]] || { echo 'Usage: desktopctl type TEXT' >&2; exit 2; }
-    printf %s "$*" | xclip -selection clipboard
-    xdotool key --clearmodifiers ctrl+v
+    shift; [[ $# -ge 1 ]] || usage
+    xdotool type --clearmodifiers --delay 15 -- "$*"
     ;;
   key)
-    [[ $# -eq 2 ]] || { echo 'Usage: desktopctl key KEY' >&2; exit 2; }
+    [[ $# -eq 2 ]] || usage
     xdotool key --clearmodifiers "$2"
     ;;
-  *)
-    echo 'Usage: desktopctl {screenshot [FILE] | size | url URL | click X Y | type TEXT | key KEY}' >&2
-    exit 2
+  url)
+    [[ $# -eq 2 ]] || usage
+    xdotool key --clearmodifiers ctrl+l
+    xdotool type --clearmodifiers --delay 10 -- "$2"
+    xdotool key Return
     ;;
+  scroll)
+    [[ $# -ge 2 && $# -le 3 ]] || usage
+    case "$2" in
+      up) button=4 ;;
+      down) button=5 ;;
+      *) usage ;;
+    esac
+    count="${3:-3}"
+    [[ "$count" =~ ^[0-9]+$ ]] && (( count <= 100 )) || usage
+    xdotool click --repeat "$count" --delay 60 "$button"
+    ;;
+  *) usage ;;
 esac

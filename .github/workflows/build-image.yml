@@ -23,6 +23,9 @@ jobs:
       - name: Checkout this deployment repository
         uses: actions/checkout@v4
 
+      - name: Run deployment overlay checks
+        run: bash tests/check.sh
+
       - name: Checkout upstream Rakazo and overlay deployment files
         id: prepare
         shell: bash

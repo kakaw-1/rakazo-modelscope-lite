@@ -1,143 +1,166 @@
-# Rakazo 魔搭单容器版：Desktop Provider + Chrome + Cloudflare Tunnel
+# Rakazo ModelScope Lite — root + 客户端内置实时桌面（实验版）
 
-**状态：可提交到 GitHub 的实验性源码与构建流程，尚未在 GHCR/魔搭完成实际镜像构建或端到端测试。**
+> **状态：源码叠加包，未完成上游 Rakazo 的完整构建，也没有完成 GHCR 或魔搭端到端实测。**
+> 已做离线语法和代码补丁样例测试。GitHub Actions 正式构建会做上游 TypeScript 检查。
 
-架构（参考 herm_lite 的 GitHub Actions -> GHCR -> 魔搭方式）：
+基于之前的 `rakazo-modelscope-lite` 修改，保留 GitHub Actions → GHCR → 魔搭 Docker 创空间工作流。
 
-```text
-你的电脑 Rakazo 客户端 / 手机浏览器
-                  │
-        https://rakazo.example.com
-                  │
-          Cloudflare Tunnel
-                  │ (only localhost:5173)
- ┌────────────────魔搭单个容器────────────────────┐
- │  PostgreSQL 16     localhost:5432             │
- │  Rakazo API        localhost:3100             │
- │  Rakazo Worker     内部无公开端口              │
- │  Rakazo Web        localhost:5173             │
- │  Chrome/Xvfb       DISPLAY=:99                │
- │  Desktop Provider  真实 PNG + xdotool         │
- │  Health server     0.0.0.0:7860 (魔搭可访问)   │
- │  cloudflared       向 Cloudflare 建立出站连接  │
- └───────────────────────────────────────────────┘
-```
-
-不安装 noVNC；PostgreSQL 和 Rakazo 文件均位于容器可写层（`/var/lib/rakazo/pgdata`、`/var/lib/rakazo/data`），**不用 `/mnt/workspace` 或外部数据库**。容器重新创建，数据可能丢失。没有自动备份。
-
-## 1. 在 GitHub 创建部署仓库
-
-在 GitHub 新建仓库，如 `rakazo-modelscope-lite`。将本压缩包 **根目录**下的以下文件上传到该仓库（特别注意隐藏的 `.github/workflows/build-image.yml`）：
+## 1. 运行结构
 
 ```text
-rakazo-modelscope-lite/
-├── .github/workflows/build-image.yml
-├── deploy/
-│   ├── Dockerfile
-│   ├── entrypoint.sh
-│   ├── health.mjs
-│   ├── desktop-x11.ts
-│   ├── patch-desktop.mjs
-│   ├── desktopctl
-│   └── env.example
-├── modelscope/Dockerfile
-├── tests/check.sh
-└── README.zh-CN.md
+电脑 Rakazo 客户端 / 手机浏览器
+            |
+   https://rakazo.example.com
+            |
+      Cloudflare Tunnel
+            | (只转发 127.0.0.1:5173)
+┌─────────────── 魔搭单个 Docker 容器 ───────────────────────┐
+│  0.0.0.0:7860   健康检查（魔搭入口）                       │
+│  127.0.0.1:5173 Rakazo Web (root)                        │
+│  127.0.0.1:3100 Rakazo API (root)                        │
+│  Worker (root) / Desktop Provider (root)                │
+│  PostgreSQL 16 (postgres；本机目录 /var/lib/rakazo/pgdata) │
+│  Xvfb :99 + Openbox + Chrome --no-sandbox (root)         │
+│  xdotool / scrot   真实鼠标键盘与 AI 截图                  │
+│  127.0.0.1:5900 x11vnc -viewonly (无单独公网入口)         │
+│  127.0.0.1:6080 websockify / noVNC (无单独公网入口)       │
+└──────────────────────────────────────────────────────────┘
 ```
 
-GitHub Actions 将在构建过程中从 `elie222/rakazo` 拉取**完整源码**，覆盖本项目的 `deploy` 文件，运行源代码补丁并构建镜像。你不需要在这个部署仓库手工复制 Rakazo 源码。
+**和旧版相比：** Desktop Provider `connectScreen()` 从 `desktop://screen/...` 占位地址改成 `http://127.0.0.1:6080/vnc.html?...`，依赖 Rakazo 已有的受认证 `/novnc/session/...` 代理，把实时画面嵌入电脑客户端 Computer 面板，而不是新开 noVNC 网页。
 
-构建时上游源码默认使用 `main`。为了防止 Rakazo 后续修改导致补丁冲突，建议在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions -> Variables` 里设置 `RAKAZO_REF` 为通过构建验证的完整 Git commit SHA；也可以在 `Actions -> Build Rakazo ModelScope image -> Run workflow` 里手动输入一个 Git commit SHA。
+**本版只读观看。** x11vnc 使用 `-viewonly`，而 Provider 会拒绝 `interactive` 屏幕会话；用户不能通过这个 VNC 通道直接接管桌面。AI 仍用内部 X11 工具正常点击、截图。桌面统一使用一个 `DISPLAY=:99`，不同 Agent 不能独立拥有各自的桌面。
 
-推送到 `main` 后，GitHub Actions 运行 `Build Rakazo ModelScope image`，构建并推送镜像到：
+## 2. GitHub 仓库上传文件
+
+上传 ZIP 解压后的整个项目目录内容（含隐藏的 `.github` 文件夹）到你的 GitHub 仓库：
 
 ```text
-ghcr.io/<github-owner>/<repo-name>:latest
+.github/workflows/build-image.yml
+README.zh-CN.md
+deploy/Dockerfile
+deploy/desktop-x11.ts
+deploy/desktopctl
+deploy/entrypoint.sh
+deploy/env.example
+deploy/health.mjs
+deploy/patch-desktop.mjs
+modelscope/Dockerfile
+tests/check.mjs
+tests/check.sh
 ```
 
-标签统一转为小写。还会生成 `sha-...` 标签。仅主分支构建会推送 `latest`。`GITHUB_TOKEN` 用于 GHCR 登录，不需要额外 PAT。查看 Actions 运行记录，**镜像成功推送后**再继续下一步。
+将仓库主分支设为 `main` 并 push 后，GitHub Actions `Build Rakazo ModelScope image` 会：
 
-> GHCR 包首次发布可能默认为私有。若魔搭没有使用私有仓库凭据的方式，需要在 GitHub Packages 中将该镜像设置为 Public（构建镜像内不放账户密钥）。
+1. 验证部署脚本与补丁样例。
+2. 从 `https://github.com/elie222/rakazo` 检出上游源码。
+3. 把 `deploy/` 叠加到上游的 `infra/modelscope-single/`。
+4. 打补丁，执行 `pnpm --filter @rakazo/adapters check` 做类型检查。
+5. 构建 `linux/amd64` 镜像并推送 `ghcr.io/<github用户名>/<仓库名>:latest`。
 
-## 2. 建立 Cloudflare Tunnel
+**建议：** 在 GitHub Actions 仓库变量设置 `RAKAZO_REF` 为一次构建通过的上游完整 commit SHA，避免以后自动跟随 main 带来补丁失效。补丁在发现不同签名时会报错停构建，而不会悄悄跳过。
 
-1. Cloudflare Zero Trust -> Networks -> Tunnels -> Create Tunnel，选择 Cloudflared，创建 **remotely-managed** Tunnel。
-2. 为该 Tunnel 建立一个 Public Hostname，例如 `rakazo.example.com`。
-3. **Service Type = HTTP；Service URL = `http://127.0.0.1:5173`**，不是 7860。
-4. 复制 Tunnel Token 到魔搭的运行环境变量 `TUNNEL_TOKEN`。
-5. 通过 Cloudflare Access 限制访问，尤其不要暴露给不可信用户。Electron 桌面客户端可能不支持 Cloudflare Access 的额外重定向登录；需要单独验证。不要为了兼容桌面客户端就将开发模式实例裸露在公网。
+镜像首次发布可能是 Private；如果魔搭无法认证 GHCR，应在 GHCR Packages 将镜像设置成 Public。镜像里不能写入真实密钥。
 
-没有第二个域名，也不暴露 VNC、Chrome 调试端口或数据库端口。
+## 3. 魔搭仓库只需要一个 Dockerfile
 
-## 3. 创建魔搭 Docker 创空间
+将 `modelscope/Dockerfile` 上传到魔搭 Docker 创空间仓库根目录，修改成实际镜像路径，例如：
 
-1. 在 ModelScope 新建 Docker 创空间；使用的机器架构必须是 **linux/amd64**。
-2. 将本项目 `modelscope/Dockerfile` 内容作为魔搭仓库的 Dockerfile，替换 GHCR 镜像路径。魔搭只负责拉取镜像，不在魔搭重新编译 Rakazo。
-3. 在魔搭运行时环境变量（Secrets）中逐项添加 `deploy/env.example` 中的变量；**不要将填写密钥后的文件提交到 Git**。
-4. 确保应用对魔搭监听 `0.0.0.0:7860`。端口 7860 用于健康检查；`/` 与 `/health` 返回 200，`/ready` 仅在本地 PostgreSQL、API、Web 监听时返回 200。
-5. 启动实例。查看日志，应依次看到 PostgreSQL 启动、数据库迁移、创建管理员、Xvfb/Chrome、API/Worker、Web 和 cloudflared。
-
-关键运行时变量（完整示例在 `deploy/env.example`）：
-
-```dotenv
-POSTGRES_PASSWORD=<至少32位hex>
-POSTGRES_APP_PASSWORD=<另外一组至少32位hex>
-BETTER_AUTH_SECRET=<32字符以上随机串>
-ENCRYPTION_KEY=<恰好64位hex>
-SCREEN_PROXY_SECRET=<单独随机串>
-OWNER_EMAIL=you@example.com
-OWNER_PASSWORD=<至少16字符>
-BETTER_AUTH_URL=https://rakazo.example.com
-WEB_ORIGIN=https://rakazo.example.com
-RAKAZO_HOST=rakazo.example.com
-RAKAZO_ALLOWED_HOSTS=rakazo.example.com
-TUNNEL_TOKEN=<Cloudflare Token>
+```dockerfile
+FROM ghcr.io/yourname/rakazo-modelscope-lite:latest
 ```
 
-PostgreSQL 的管理员密码和应用密码是 **两组不同的随机 hex**。容器启动脚本自动组装 `DATABASE_MIGRATION_URL` / `DATABASE_URL`，不用手动配置外部数据库，也不用暴露 5432。Rakazo 自带迁移脚本会创建 runtime 数据库角色并设置访问权限。
+魔搭平台通过 `0.0.0.0:7860` 检测容器。**7860 不负责 Rakazo 管理界面。**
 
-`NODE_ENV=development` 和 `SANDBOX_PROVIDER=desktop` 已内置于镜像。Desktop Provider 在上游拒绝 production 环境，因为 Agent 将在应用所在容器内直接执行命令。此版本只能当私人、受信任的开发测试实例使用。若 Linux Chrome 沙箱在魔搭不支持，可以尝试设置 `CHROME_NO_SANDBOX=1`，但会明显削弱安全性。
+## 4. Cloudflare Tunnel（保持一个域名）
 
-## 4. 验证访问
+- Cloudflare Zero Trust → Tunnels：使用 remotely managed Tunnel。
+- Public Hostname：`rakazo.example.com`（替换为实际域名）。
+- Service Type：`HTTP`。
+- Service URL：**`http://127.0.0.1:5173`**，不是 7860、3100 或 6080。
+- Tunnel Token：填写到魔搭运行时 `TUNNEL_TOKEN`。
 
-从魔搭控制台检查：
+不要新增 `desktop.example.com`，不要把 5900/6080 开放到公网。屏幕通过 Rakazo 生成的 `/novnc/session/...` 加密签名能力地址访问，`SCREEN_PROXY_SECRET` 必须保持固定且独立。
+
+### 安全边界
+
+**这个版本按要求让 Rakazo API/Worker/Web/Chrome/Agent 作为 root 运行。** Chrome 启动必须加 `--no-sandbox`。恶意网页或 Agent 命令可能影响整个容器并读取同容器中的应用/数据库凭据。只适合一次性、单用户、隔离的私人实验；切勿放置生产数据或不可信 Agent 任务。即使配置 Cloudflare Access，也不能视为生产级安全隔离。
+
+魔搭的原始创空间访问入口也要设为私有；否则可能绕过 Cloudflare Access。Electron 客户端不一定兼容 Access 的网页登录重定向，需要单独验证。**不能为了兼容客户端就把 root 开发实例公开裸奔。**
+
+## 5. 魔搭运行时环境变量
+
+复制 `deploy/env.example`，在魔搭 Settings / Secrets 中逐项设置，**不要上传包含密钥的 `.env` 文件。**
+
+必须设置（11 项）：
+
+| 变量 | 要求 |
+| --- | --- |
+| `POSTGRES_PASSWORD` | 管理员密码；32+ 十六进制字符 |
+| `POSTGRES_APP_PASSWORD` | 另一组独立密码；32+ 十六进制字符 |
+| `BETTER_AUTH_SECRET` | 32+ 随机字符 |
+| `ENCRYPTION_KEY` | 恰好 64 个十六进制字符 |
+| `SCREEN_PROXY_SECRET` | 独立随机字符，跨重启保持不变 |
+| `OWNER_EMAIL` | 首次管理员邮箱 |
+| `OWNER_PASSWORD` | 至少 16 字符 |
+| `BETTER_AUTH_URL` | `https://rakazo.example.com` |
+| `WEB_ORIGIN` | 与 `BETTER_AUTH_URL` 完全一致 |
+| `RAKAZO_HOST` | `rakazo.example.com`（不带 https） |
+| `TUNNEL_TOKEN` | Cloudflare Tunnel 真实 Token |
+
+建议还设置 `RAKAZO_ALLOWED_HOSTS=rakazo.example.com` 和 `API_URL=https://rakazo.example.com`。无需数据库 URL：启动脚本会在容器中根据两个 PostgreSQL 密码生成。
+
+下列变量在镜像/启动脚本中固定：`NODE_ENV=development`、`SANDBOX_PROVIDER=desktop`、`RAKAZO_X11=1`、`DATA_DIR=/var/lib/rakazo/data`、`DISPLAY=:99`。没有 `/mnt/workspace`，没有外部数据库，也没有额外的 VNC 密码环境变量。VNC 使用回环地址 + view-only，外部鉴权依靠 Rakazo 自身的签名屏幕代理。
+
+> 数据只保存到可写容器层；删除或替换容器会丢失 PostgreSQL、Chrome 登录态与文件。没有自动备份。
+
+## 6. 首次启动验收
+
+在魔搭终端执行：
 
 ```bash
+# 7860：魔搭健康服务
 curl -fsS http://127.0.0.1:7860/health
 curl -fsS http://127.0.0.1:7860/ready
+
+# 5173：Rakazo 页面（不能是 API 3100）
+curl -I http://127.0.0.1:5173/
+
+# 6080：本地 noVNC 页面，只可容器内访问
+curl -I http://127.0.0.1:6080/vnc.html
+
+# 进程权限检查（API/Worker/Chrome 是 root，数据库是 postgres）
+ps -eo user,pid,args | grep -E 'postgres|apps/api|apps/worker|chrome|Xvfb|x11vnc|websockify' | head -30
+
+# X11 真实桌面截图
+desktopctl size
+desktopctl screenshot /var/lib/rakazo/screenshots/first.png
 ```
 
-从手机 Safari/Chrome 打开 `https://rakazo.example.com` 并登录。电脑可通过浏览器或 Rakazo 客户端选择已有实例，输入同一个 URL（客户端与 CF Access 的兼容性需要单独测试）。
+`/ready` 应报告 `postgres`、`api`、`web`、`vnc`、`screen` 为 `true`。
 
-从容器内部的终端验证图形浏览器：
+然后用浏览器或 Rakazo Existing instance 客户端登录 `https://rakazo.example.com`，进入 Agent 的 **Computer** 面板测试实时桌面。`computer_observe` 应当看到真实截图，而非原版占位图。
 
-```bash
-gosu rakazo env DISPLAY=:99 /app/infra/modelscope-single/desktopctl size
-gosu rakazo env DISPLAY=:99 /app/infra/modelscope-single/desktopctl url https://example.org
-gosu rakazo env DISPLAY=:99 /app/infra/modelscope-single/desktopctl screenshot /var/lib/rakazo/screenshots/test.png
-```
+### 如果电脑画面打不开
 
-最后让 Rakazo Agent 使用 `computer_observe` 观察真实 PNG、使用 `computer_act` 点击输入；如果只得到 1x1 占位图，检查构建日志里的桌面补丁以及 `RAKAZO_X11=1`。这版会设置 `graphical: true`，但 **不会实现 `pageBrowser()` 语义级浏览器工具，也不会实现用户远程桌面画面**；浏览器通过真实桌面截图/点击工具操作。
+1. 先在容器中验证 `curl http://127.0.0.1:6080/vnc.html` 与 `desktopctl screenshot`。
+2. 查看 Rakazo Web 日志的 `screen.proxy.target_rejected`、`screen.proxy.websocket_handshake_failed`、`screen.proxy.websocket_upgraded`，以及 API 对 `computer.screenUrl` 的响应。
+3. 保证 CF Tunnel 指向 5173，`BETTER_AUTH_URL`、`WEB_ORIGIN`、`API_URL` 均是外部 HTTPS 域名。
+4. **注意：** 本版仅把 `connectScreen()` 接到内部 noVNC URL，未在真实 Rakazo 的 API→Web 屏幕代理中做端到端测试。如果该代理拒绝 loopback 上游、noVNC 资源重写不兼容，仍需针对具体构建版本适配代理层；不能仅凭 6080 能打开就认定客户端实时画面一定成功。
 
-## 5. 运行行为与限制
+## 7. 已知限制与已测试项目
 
-- 7860 只提供非敏感健康状态，不转发 Rakazo，也不返回数据库信息。
-- Web、API、PostgreSQL 只在 `127.0.0.1` 监听。CF Tunnel 只将域名映射到本地 Web 5173。
-- 数据库和截图在容器本地可写层，不挂载 `/mnt/workspace`。容器重建和镜像替换会丢失数据。不要在这里保存生产数据、长效密钥或唯一文件。
-- GitHub Actions 每次构建镜像都会重新执行源代码补丁；如果 Rakazo 上游改动了目标代码，补丁会**明确报错停止**，避免静默构建出无法操控屏幕的镜像。
-- Google Chrome 和 cloudflared 下载地址目前没有 pin/hash；为了可复现和供应链安全，正式使用前需锁定具体版本与校验值。
-- 同一 Xvfb 显示器供所有 Agent 共享。**只建议单 Agent 操作图形桌面**，不能当作多用户隔离环境。
-- Agent、API 和 Worker 都运行在容器里；这不是安全沙箱，Agent 可能读取同容器文件和运行时秘密。配合开发模式，只适合可信测试任务。
-- Cloudflare Tunnel 无法防止魔搭创空间休眠或资源被回收。即使 Tunnel 正常，创空间不运行也无法访问。
+- 离线完成：Shell 语法、Node JS 语法、上游 `connectScreen` 的补丁模拟、失败时停止构建、Dockerfile/root/VNC 监听静态验证。
+- 未在本环境完成：Rakazo 上游实际 Git checkout、TypeScript 全量类型检查、GHCR 构建、魔搭启动、CF WebSocket 升级与客户端屏幕真实显示。这些需通过 GitHub Actions 和实际部署验证。
+- `x11vnc -viewonly` + `connectScreen` 拒绝 interactive，只支持**观看**；人工控制和多 Agent 独立桌面没有实现。
+- 无独立 Agent 沙箱隔离，数据库与应用同容器，Agent root 极高风险。
+- Chrome root 必须 `--no-sandbox`；无法确保网页与主控安全隔离。
+- 镜像依赖 upstream Rakazo 主分支的 Desktop Provider 结构；建议锁定上游 commit 后正式使用。
+- Google Chrome 与 cloudflared 的下载链接仍是非校验版；需要确定可重现/供应链可控时，应固定版本、哈希并自行验证镜像。
 
-## 6. 验证状态
+官方参考：
 
-**当前只做了本地静态测试**：Shell 和 Node JS 文件语法、补丁脚本的构造性测试、Workflow YAML 解析以及健康服务器接口测试。**未完成完整 Docker build、GHCR 推送、魔搭镜像启动和 Rakazo 端到端浏览器操作实测**，因为本环境无法连接外部源码与镜像仓库执行构建。
-
-参考：
-
-- https://github.com/elie222/rakazo
-- https://github.com/elie222/rakazo/blob/main/infra/railway/start.sh
 - https://github.com/elie222/rakazo/blob/main/packages/adapters/src/desktop-sandbox.ts
-- https://github.com/kakaw-1/herm_lite/blob/main/.github/workflows/docker-build.yml
-- https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/run-parameters/
+- https://github.com/elie222/rakazo/blob/main/docs/computer-runtime.md
+- https://github.com/elie222/rakazo/blob/main/docs/self-host.md
+- https://github.com/novnc/noVNC

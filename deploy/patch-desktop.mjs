@@ -38,9 +38,43 @@ replaceOnce(
   '    for (const action of actions) {\n      if (process.env.RAKAZO_X11 === "1") await actX11(action);\n      else applyPlaceholderAction(box, action);\n    }',
   'act',
 );
+// Convert Desktop Provider's placeholder ScreenSession to the actual local
+// read-only noVNC gateway. Rakazo's existing authenticated /novnc proxy
+// seals and re-hosts this URL for its web/Electron Computer pane.
+// Match the entire original method, fail closed if the upstream contract changes.
+const screenMethod = /  async connectScreen\(\s*computer: ComputerRef,\s*_request: ScreenRequest,\s*_context: AdapterContext,\s*\): Promise<ScreenSession> \{\s*return \{\s*url: `desktop:\/\/screen\/\$\{computer\.id\}`,\s*mimeType: "text\/plain",\s*close: async \(\) => undefined,\s*\};\s*\}/g;
+const screenMatches = [...source.matchAll(screenMethod)];
+if (screenMatches.length !== 1) {
+  throw new Error(`Desktop screen patch failed: expected one placeholder connectScreen(), found ${screenMatches.length}; pin a compatible Rakazo commit.`);
+}
+source = source.replace(screenMethod, `  async connectScreen(
+    computer: ComputerRef,
+    _request: ScreenRequest,
+    _context: AdapterContext,
+  ): Promise<ScreenSession> {
+    this.requiredBox(computer);
+    if (process.env.RAKAZO_X11 === "1") {
+      // The local x11vnc endpoint is also started with -viewonly.
+      // Human takeover needs its own authenticated control channel; refuse it.
+      if (_request.interactive) {
+        throw new Error("This Desktop Provider screen is view-only; interactive takeover is disabled");
+      }
+      return {
+        url: "http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale&view_only=true&path=websockify",
+        mimeType: "text/html",
+        close: async () => undefined,
+      };
+    }
+    return {
+      url: \`desktop://screen/\${computer.id}\`,
+      mimeType: "text/plain",
+      close: async () => undefined,
+    };
+  }`);
+
 writeFileSync(target, source);
 copyFileSync(
   resolve(root, 'infra/modelscope-single/desktop-x11.ts'),
   resolve(root, 'packages/adapters/src/desktop-x11.ts'),
 );
-console.log('Enabled experimental X11 screenshot and mouse/keyboard Desktop Provider interface.');
+console.log('Enabled experimental X11 observe/act plus view-only noVNC connectScreen.');
