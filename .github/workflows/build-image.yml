@@ -1,0 +1,75 @@
+name: Build Rakazo ModelScope image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rakazo_ref:
+        description: 'Rakazo upstream branch, tag, or commit SHA (pin a SHA for repeatability)'
+        required: false
+        default: 'main'
+
+env:
+  UPSTREAM_REPO: https://github.com/elie222/rakazo.git
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout this deployment repository
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream Rakazo and overlay deployment files
+        id: prepare
+        shell: bash
+        env:
+          RAKAZO_REF: ${{ inputs.rakazo_ref || vars.RAKAZO_REF || 'main' }}
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout "$UPSTREAM_REPO" upstream
+          git -C upstream fetch --depth 1 origin "$RAKAZO_REF"
+          git -C upstream checkout --detach FETCH_HEAD
+          cp -R deploy upstream/infra/modelscope-single
+          cp deploy/Dockerfile upstream/Dockerfile
+          sha="$(git -C upstream rev-parse HEAD)"
+          echo "rakazo_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Rakazo source revision: $sha"
+          image="$(printf 'ghcr.io/%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.prepare.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,format=short
+
+      - name: Build and push linux/amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./upstream
+          file: ./upstream/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            RAKAZO_COMMIT=${{ steps.prepare.outputs.rakazo_sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

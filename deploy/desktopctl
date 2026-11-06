@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export DISPLAY="${DISPLAY:-:99}"
+
+case "${1:-}" in
+  screenshot)
+    target="${2:-/tmp/rakazo-desktop.png}"
+    mkdir -p "$(dirname "$target")"
+    scrot -z "$target"
+    echo "$target"
+    ;;
+  size)
+    xdpyinfo | grep -E 'dimensions:'
+    ;;
+  url)
+    [[ $# -eq 2 ]] || { echo 'Usage: desktopctl url URL' >&2; exit 2; }
+    xdotool key --clearmodifiers ctrl+l
+    printf %s "$2" | xclip -selection clipboard
+    xdotool key --clearmodifiers ctrl+v Return
+    ;;
+  click)
+    [[ $# -eq 3 ]] || { echo 'Usage: desktopctl click X Y' >&2; exit 2; }
+    xdotool mousemove --sync "$2" "$3" click 1
+    ;;
+  type)
+    shift
+    [[ $# -gt 0 ]] || { echo 'Usage: desktopctl type TEXT' >&2; exit 2; }
+    printf %s "$*" | xclip -selection clipboard
+    xdotool key --clearmodifiers ctrl+v
+    ;;
+  key)
+    [[ $# -eq 2 ]] || { echo 'Usage: desktopctl key KEY' >&2; exit 2; }
+    xdotool key --clearmodifiers "$2"
+    ;;
+  *)
+    echo 'Usage: desktopctl {screenshot [FILE] | size | url URL | click X Y | type TEXT | key KEY}' >&2
+    exit 2
+    ;;
+esac

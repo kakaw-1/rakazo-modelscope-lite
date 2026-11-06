@@ -1,0 +1,14 @@
+# Normalize to LF on check-in and check-out.
+# Container startup scripts and Dockerfiles must never carry CRLF, otherwise
+# Debian inside the image fails with "bad interpreter: /bin/bash^M".
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.yml  text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
